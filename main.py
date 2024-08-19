@@ -9,12 +9,10 @@ def main_menu():
     print("3. Run mass revoke from rabby")
     print("4. Exit")
 
-
     choice = input("Choose an option: ").strip()
 
     if choice == '1':
-        private_key = input("Enter your private key: ").strip()
-        asyncio.run(run_contract_revoke(private_key))
+        asyncio.run(run_contract_revoke())
     elif choice == '2':
         asyncio.run(run_single_rabby_revoke())
     elif choice == '3':
