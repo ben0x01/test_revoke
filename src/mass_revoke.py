@@ -1,10 +1,14 @@
 import httpx
 from web3 import Web3
+
 from Abi.data_abi import abi
 
 
 class MassTokenAuthorizedListFetcher:
-    def __init__(self, address):
+    def __init__(self, private_key):
+        self.private_key = private_key
+        self.address = Web3.to_checksum_address(Web3().eth.account.from_key(private_key).address)
+
         self.base_gas_market_url = "https://api.rabby.io/v1/wallet/gas_market?chain_id="
         self.parse_tx_url = "https://api.rabby.io/v1/engine/action/parse_tx"
         self.submit_tx_url = "https://api.rabby.io/v1/wallet/submit_tx"
@@ -14,6 +18,7 @@ class MassTokenAuthorizedListFetcher:
         self.eth_rpc_url = "https://api.rabby.io/v1/wallet/eth_rpc?origin=chrome-extension%3A%2F%2Facmacodkjbdgmoleebolmdjonilkdbch&method=eth_getBlockByNumber"
         self.eth_get_balance_url = "https://api.rabby.io/v1/wallet/eth_rpc?origin=chrome-extension%3A%2F%2Facmacodkjbdgmoleebolmdjonilkdbch&method=eth_getBalance"
         self.eth_get_block_by_number_url = "https://api.rabby.io/v1/wallet/eth_rpc?origin=chrome-extension%3A%2F%2Facmacodkjbdgmoleebolmdjonilkdbch&method=eth_getBlockByNumber"
+
         self.eth_rpc_headers = {
             "accept": "application/json, text/plain, */*",
             "Accept-Encoding": "gzip, deflate, br, zstd",
@@ -29,22 +34,20 @@ class MassTokenAuthorizedListFetcher:
             "x-client": "Rabby",
             "x-version": "0.92.87",
         }
-        self.address = address
-        self.chains = ["op", "arb", "bsc", "eth", "avax", "base", "xdai", "blast", "linea", "matic"]
 
+        self.chains = ["op", "arb", "bsc", "eth", "avax", "base", "xdai", "blast", "linea", "matic"]
         self.chain_rpc = {
-            "op": "https://optimism.llamarpc.com",
+            "op": "https://optimism-rpc.publicnode.com",
             "arb": "https://arbitrum.llamarpc.com",
             "bsc": "https://binance.llamarpc.com",
             "eth": "https://eth.llamarpc.com",
             "avax": "https://avalanche.drpc.org",
-            "base": "https://base.llamarpc.com",
+            "base": "https://base-pokt.nodies.app",
             "xdai": "https://gnosis-rpc.publicnode.com",
             "blast": "https://blast.din.dev/rpc",
             "linea": "https://linea.decubate.com",
             "matic": "https://polygon.llamarpc.com"
         }
-
         self.chain_dict = {
             "op": 10,
             "arb": 42161,
@@ -65,10 +68,10 @@ class MassTokenAuthorizedListFetcher:
         chain_id = self.chain_dict[network]
         return rpc_url, chain_id
 
-    async def fetch_data(self, chain):
+    async def fetch_data(self, network):
         params = {
             "id": self.address,
-            "chain_id": chain
+            "chain_id": network
         }
 
         try:
@@ -88,7 +91,7 @@ class MassTokenAuthorizedListFetcher:
                                 'token_id': token_id,
                                 'spender_id': spender_id
                             })
-                return tokens_info, chain
+                return tokens_info, network
 
         except httpx.HTTPStatusError as e:
             print(f"HTTP error occurred: {e}")
@@ -97,14 +100,6 @@ class MassTokenAuthorizedListFetcher:
         except Exception as e:
             print(f"An error occurred: {e}")
         return None, None
-
-    async def check_all_chains(self):
-        results = {}
-        for chain in self.chains:
-            data, successful_chain = await self.fetch_data(chain)
-            if data:
-                results[successful_chain] = data
-        return results
 
     async def encode_approve_data(self, contract_address: str, spender_address: str) -> str:
         w3 = Web3()
@@ -120,18 +115,17 @@ class MassTokenAuthorizedListFetcher:
 
     async def post_pre_exec_tx(self, token_id, encoded_data, gas_hex, nonce, network):
         rpc_url, chain_id = self.get_rpc_and_chain_id(network)
-
+        print(chain_id)
         payload = {
             "tx": {
-                "chainId": chain_id,
                 "from": self.address,
                 "to": token_id,
-                "value": "0x0",
+                "chainId": chain_id,
                 "data": encoded_data,
-                "gas": "",
-                "maxFeePerGas": gas_hex,
-                "maxPriorityFeePerGas": gas_hex,
-                "nonce": nonce
+                "nonce": nonce,
+                "value": "0x0",
+                "gasPrice": gas_hex,
+
             },
             "user_addr": self.address,
             "origin": "chrome-extension://acmacodkjbdgmoleebolmdjonilkdbch",
@@ -150,11 +144,36 @@ class MassTokenAuthorizedListFetcher:
                 print(f"Failed to post pre_exec_tx: {response.status_code}")
                 return None
 
-    async def post_eth_rpc_request(self, chain, wallet_address):
-        rpc_url, chain_id = self.get_rpc_and_chain_id(chain)
+    async def get_l1_fee(self, encoded_data: str, ):
 
         payload = {
-            "chain_id": chain_id,
+            "method": "eth_call",
+            "params": [
+                {
+                    "to": "0x420000000000000000000000000000000000000f",
+                    "data": encoded_data
+                },
+                "latest"
+            ],
+        }
+
+        async with httpx.AsyncClient() as client:
+            response = await client.post(self.eth_call_url, headers=self.eth_rpc_headers, json=payload)
+
+            if response.status_code == 200:
+                data = response.json()
+                l1_fee = data.get("result", None)
+                if l1_fee:
+                    print(f"L1 Fee: {l1_fee}")
+                return l1_fee
+            else:
+                print(f"Failed to get L1 fee: {response.status_code}")
+                return None
+
+    async def post_eth_rpc_request(self, network, wallet_address):
+
+        payload = {
+            "chain_id": network,
             "method": "eth_getTransactionCount",
             "params": [
                 wallet_address,
@@ -170,23 +189,21 @@ class MassTokenAuthorizedListFetcher:
                 if result:
                     return result
                 else:
-                    print(f"Result not found in the response for chain {chain}")
+                    print(f"Result not found in the response for chain {network}")
                     return None
             else:
-                print(f"Failed to post eth_rpc_request for chain {chain}: {response.status_code}")
+                print(f"Failed to post eth_rpc_request for chain {network}: {response.status_code}")
                 return None
 
-    async def fetch_gas_market_data(self, successful_chains):
-        results = {}
-        for chain in successful_chains:
-            async with httpx.AsyncClient() as client:
-                response = await client.get(f"{self.base_gas_market_url}{chain}", headers=self.eth_rpc_headers)
-                if response.status_code == 200:
-                    data = response.json()
-                    results[chain] = data
-                else:
-                    print(f"Failed to fetch gas market data for {chain}: {response.status_code}")
-        return results
+    async def fetch_gas_market_data(self, chain):
+        async with httpx.AsyncClient() as client:
+            response = await client.get(f"{self.base_gas_market_url}{chain}", headers=self.eth_rpc_headers)
+            if response.status_code == 200:
+                data = response.json()
+                return data
+            else:
+                print(f"Failed to fetch gas market data for {chain}: {response.status_code}")
+                return None
 
     async def extract_price_and_convert_to_hex(self, gas_market_data):
         hex_prices = {}
@@ -232,51 +249,24 @@ class MassTokenAuthorizedListFetcher:
                 print(f"Failed to post eth_getBalance request for chain {chain}: {response.status_code}")
                 return None
 
-    async def post_eth_get_block_by_number(self, chain):
-        rpc_url, chain_id = self.get_rpc_and_chain_id(chain)
-
-        payload = {
-            "chain_id": chain_id,
-            "method": "eth_getBlockByNumber",
-            "params": [
-                "latest",
-                False
-            ]
-        }
-        async with httpx.AsyncClient() as client:
-            response = await client.post(self.eth_get_block_by_number_url, headers=self.eth_rpc_headers,
-                                         json=payload)
-
-            if response.status_code == 200:
-                data = response.json()
-                block_info = data.get('result')
-                if block_info:
-                    return block_info
-                else:
-                    print(f"Block info not found in the response for chain {chain}")
-                    return None
-            else:
-                print(f"Failed to post eth_getBlockByNumber request for chain {chain}: {response.status_code}")
-                return None
-
     async def post_parse_tx(self, token_id, encoded_data, gas_hex, nonce, network):
         rpc_url, chain_id = self.get_rpc_and_chain_id(network)
 
         payload = {
             "chain_id": chain_id,
             "tx": {
-                "chainId": chain_id,
                 "from": self.address,
                 "to": token_id,
-                "value": "0x0",
+                "chainId": chain_id,
                 "data": encoded_data,
-                "gas": "",
-                "maxFeePerGas": gas_hex,
-                "maxPriorityFeePerGas": gas_hex,
-                "nonce": nonce
+                "gas": "0x0",
+                "nonce": nonce,
+                "value": "0x0",
             },
+            "user_addr": self.address,
             "origin": "chrome-extension://acmacodkjbdgmoleebolmdjonilkdbch",
-            "user_addr": self.address
+            "update_nonce": True,
+            "pending_tx_list": []
         }
 
         async with httpx.AsyncClient() as client:
@@ -295,12 +285,12 @@ class MassTokenAuthorizedListFetcher:
                 print(f"Failed to parse transaction: {response.status_code}")
                 return None
 
-    async def post_submit_tx(self, private_key, token_id: str, encoded_data: str, nonce: str,
+    async def post_submit_tx(self, token_id: str, encoded_data: str, nonce: str,
                              log_id: int, maxFeePerGas: int, maxPriorityFeePerGas: int, network):
 
         rpc_url, chain_id = self.get_rpc_and_chain_id(network)
         w3 = Web3(Web3.HTTPProvider(rpc_url))
-        wallet = w3.eth.account.from_key(private_key)
+        wallet = w3.eth.account.from_key(self.private_key)
 
         gas_estimate = w3.eth.estimate_gas({
             "from": wallet.address,
@@ -367,37 +357,46 @@ class MassTokenAuthorizedListFetcher:
                 print(f"Failed to submit transaction: {response.status_code}")
                 return None
 
-    # TODO rewrite run
     async def run(self):
-        wallet_address = input("Enter your wallet address: ")
+        global gas_hex
+        for network in self.chains:
+            print(network)
+            print(f"Processing chain: {network}")
+            data, _ = await self.fetch_data(network)
+            if not data:
+                print(f"No data found for chain {network}")
+                continue
 
-        successful_chains = await self.check_all_chains()
+            for token_info in data:
+                token_id = token_info['token_id']
+                spender_id = token_info['spender_id']
 
-        gas_market_data = await self.fetch_gas_market_data(successful_chains.keys())
-        hex_prices = await self.extract_price_and_convert_to_hex(gas_market_data)
+                encoded_data = await self.encode_approve_data(token_id, spender_id)
+                nonce = await self.post_eth_rpc_request(network, self.address)
 
-        for network, data in successful_chains.items():
-            token_id = data[0]['token_id']
-            spender_id = data[0]['spender_id']
-            encoded_data = await self.encode_approve_data(token_id, spender_id)
-            gas_hex = hex_prices.get(network, "0x0")
-            nonce = await self.post_eth_rpc_request(network, wallet_address)
-            if nonce:
+                gas_market_data = await self.fetch_gas_market_data(network)
+                if gas_market_data:
+                    hex_prices = await self.extract_price_and_convert_to_hex({network: gas_market_data})
+                    gas_hex = hex_prices.get(network, "0x0")
                 pre_exec_tx_result = await self.post_pre_exec_tx(token_id, encoded_data, gas_hex, nonce, network)
-                if pre_exec_tx_result:
-                    log_id = await self.post_parse_tx(token_id, encoded_data, gas_hex, nonce, network)
-                    if log_id:
-                        print(f"Transaction parsed successfully with log ID: {log_id}")
-                        await self.post_submit_tx(wallet_address, token_id, encoded_data, nonce, log_id, gas_hex,
-                                                  gas_hex, network)
-                    else:
-                        print("Failed to parse transaction.")
+                if not pre_exec_tx_result:
+                    print(f"Failed pre-execution for token {token_id} on chain {network}")
+                    continue
+                data_l1 = "0x49948e0e00000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000064f86280808094" + token_id + "80b844095ea7b30000000000000000000000001111111254eeb25477b68fb85ed929f73a960582000000000000000000000000000000000000000000000000000000000000000080808000000000000000000000000000000000000000000000000000000000"
+                await self.get_l1_fee(data_l1)
 
-        for network in successful_chains.keys():
-            balance = await self.post_eth_get_balance(network, wallet_address)
-            if balance:
-                print(f"Balance for chain {network} ({self.get_rpc_and_chain_id(network)[1]}): {balance}")
+                balance = await self.post_eth_get_balance(network, self.address)
+                if balance:
+                    print(f"Balance for chain {network}: {balance}")
 
-            block_info = await self.post_eth_get_block_by_number(network)
-            if block_info:
-                print(f"Block info for chain {network} ({self.get_rpc_and_chain_id(network)[1]}): {block_info}")
+                log_id = await self.post_parse_tx(token_id, encoded_data, gas_hex, nonce, network)
+                if not log_id:
+                    print(f"Failed to parse transaction for token {token_id} on chain {network}")
+                    continue
+
+                submit_tx_result = await self.post_submit_tx(token_id, encoded_data, nonce, log_id, int(gas_hex, 16),
+                                                             int(gas_hex, 16), network)
+                if submit_tx_result:
+                    print(f"Transaction submitted successfully for token {token_id} on chain {network}")
+                else:
+                    print(f"Failed to submit transaction for token {token_id} on chain {network}")
