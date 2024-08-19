@@ -26,7 +26,9 @@ class MassTokenAuthorizedListFetcher:
             "Connection": "keep-alive",
             "content-type": "application/json",
             "Host": "api.rabby.io",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",  #add random user agent 
+
+            #эти данные можно и не указывать, без них работает (в single mode тоже самое)
             "x-api-nonce": "n_G1kQlpy6ihaTc0ErkeATqiyIATMlSotRDktguR0x",
             "x-api-sign": "331be08950feccd71752e509047727a111e0211778d4344bf126c7616b23a30f",
             "x-api-ts": "1723844498",
