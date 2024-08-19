@@ -4,14 +4,14 @@ from Abi.data_abi import abi
 
 
 class TokenAuthorizedListFetcher:
-    def __init__(self, address, network):
+    def __init__(self, network, private_key):
         self.chain_rpc = {
             "op": "https://optimism.llamarpc.com",
             "arb": "https://arbitrum.llamarpc.com",
             "bsc": "https://binance.llamarpc.com",
             "eth": "https://eth.llamarpc.com",
             "avax": "https://avalanche.drpc.org",
-            "base": "https://base.llamarpc.com",
+            "base": "https://base-pokt.nodies.app",
             "xdai": "https://gnosis-rpc.publicnode.com",
             "blast": "https://blast.din.dev/rpc",
             "linea": "https://linea.decubate.com",
@@ -36,10 +36,10 @@ class TokenAuthorizedListFetcher:
 
         self.rpc_url = self.chain_rpc[network]
         self.chain_id = self.chain_dict[network]
-
-        self.address = Web3.to_checksum_address(address)
+        self.private_key = private_key
         self.network = network
         self.web3 = Web3(Web3.HTTPProvider(self.rpc_url))
+        self.address = Web3.to_checksum_address(self.web3.eth.account.from_key(self.private_key).address)
 
         self.url = "https://api.rabby.io/v2/user/token_authorized_list"
         self.gas_market_url = f"https://api.rabby.io/v1/wallet/gas_market?chain_id={network}"
@@ -68,12 +68,14 @@ class TokenAuthorizedListFetcher:
             "x-client": "Rabby",
             "x-version": "0.92.87",
         }
+        print(self.address)
 
     async def fetch_data(self):
         params = {
             "id": self.address,
-            "chain_id": self.chain_id
+            "chain_id": self.network
         }
+        print(params)
 
         async with httpx.AsyncClient() as client:
             response = await client.get(self.url, params=params, headers=self.eth_rpc_headers)
@@ -291,7 +293,7 @@ class TokenAuthorizedListFetcher:
     async def post_tx_is_gasless(self, private_key, gas_used: int, pre_exec_success: bool, token_id: str,
                                  encoded_data: str, gas_hex: str, nonce: str):
 
-        w3 = Web3(Web3.HTTPProvider(self.rpc_url))  # Use dynamic RPC URL
+        w3 = Web3(Web3.HTTPProvider(self.rpc_url))
         wallet = w3.eth.account.from_key(private_key)
 
         gas_estimate = w3.eth.estimate_gas({
@@ -300,13 +302,14 @@ class TokenAuthorizedListFetcher:
             "data": encoded_data,
             "value": "0x0"
         })
+        print(self.chain_id)
 
         print(gas_estimate)
         payload = {
             "gas_used": gas_used,
             "pre_exec_success": pre_exec_success,
             "tx": {
-                "chainId": self.chain_id,  # Use dynamic chainId
+                "chainId": self.chain_id,
                 "from": self.address,
                 "to": token_id,
                 "data": encoded_data,
@@ -402,7 +405,6 @@ class TokenAuthorizedListFetcher:
                 return None
 
     async def run(self):
-        pk = input("Enter your private key: ")
         data = await self.fetch_data()
         if data:
             spender_ids = self.extract_spender_ids(data)
@@ -416,7 +418,8 @@ class TokenAuthorizedListFetcher:
                 hex_price, hex_priority_price = await self.extract_price_and_convert_to_hex()
 
                 nonce = await self.post_eth_rpc_request(
-                    {"chain_id": self.chain_id, "method": "eth_getTransactionCount", "params": [self.address, "latest"]})
+                    {"chain_id": self.network, "method": "eth_getTransactionCount",
+                     "params": [self.address, "latest"]})
 
                 await self.post_pre_exec_tx(token_id, encoded_data, hex_price, nonce)
 
@@ -430,6 +433,7 @@ class TokenAuthorizedListFetcher:
 
                 await self.get_contract_interaction(spender_address)
 
-                await self.post_tx_is_gasless(pk, 24059, True, token_id, encoded_data, hex_price, nonce)
+                await self.post_tx_is_gasless(self.private_key, 24059, True, token_id, encoded_data, hex_price, nonce)
 
-                await self.post_submit_tx(pk, token_id, encoded_data, nonce, log_id, hex_price, hex_priority_price)
+                await self.post_submit_tx(self.private_key, token_id, encoded_data, nonce, log_id, hex_price,
+                                          hex_priority_price)
